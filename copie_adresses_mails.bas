@@ -18,12 +18,14 @@ end type
 ' Déclaration des variables globales
 '*************************************
 global sTxtCString as string
+private const NB_EMAILS_MAX = 19 ' nombre max d'emails copiés dans le presse-papier à la fois, afin de diminuer les risques d'être considéré comme spam
 private const NB_ENSEMBLES_MAX = 101 ' nombre max d'ensembles +1
 private ensemblesChoisisTab(NB_ENSEMBLES_MAX) as integer ' liste des indexes des groupes sélectionnnés
 private nbEnsemblesSelectionnes as integer ' nombre de groupes sélectionnés
 private oDlgModele as object
 private oDlgControle as object
 private numAdherentsParEnsemble as new Collection ' collection des groupes, dont la clé est le nom du groupe, et la valeur est un GroupeT, qui contient une collection des numéros des adhérents de ce groupe
+private annule as boolean ' indique si l'utilisateur a sélectionné le bouton 'Annule'
 
 
 '************************************************************
@@ -89,8 +91,8 @@ Sub main
     end if
   loop
 
-  ' Affichage de la boite de dialogue
-  afficheBoiteDialogue(numAdherentsParEnsemble)
+  ' Affichage de la boite de dialogue de sélection des ensembles
+  afficheBoiteDialogueSelection(numAdherentsParEnsemble)
 
   ' Traitement de la sélection
   if nbEnsemblesSelectionnes > 0 then
@@ -100,11 +102,10 @@ Sub main
       adherentsSlectionnes(idxEns) = numAdherentsParEnsemble.item(ensemblesChoisisTab(idxEns)).numAdherents
     next idxEns
   
-    dim emailsSelectionnes as string ' adresses mail des adhérents dont les ensembles ont été sélectionnés
-    emailsSelectionnes = recupereEmails(adherentsSlectionnes, mainSheet)
-
-    ' copie les adresses dans le presse-papier
-    copyToClipboard(emailsSelectionnes)
+    ' adresses mail des adhérents dont les ensembles ont été sélectionnés
+    dim emailsSelectionnes() as string : emailsSelectionnes = recupereEmails(adherentsSlectionnes, mainSheet)
+    
+    restitueEmails(emailsSelectionnes)
   endif
 
 end sub
@@ -115,22 +116,22 @@ end sub
 ' Ajoute l'adhérent à la collection. Si le groupe n'existe pas, il est créé
 '***************************************************************************
 Sub ajouteAdherent(numeroAdherent as integer, nomGroupe as string, byRef adherentsParGroupe as new Collection, typeDeGroupe as string)
-    dim nomGroupeSansEspace as string : nomGroupeSansEspace = rtrim(nomGroupe) ' nom d'un ensemble, sans espace à la fin
-	dim groupeDansColl as GroupeT
+  dim nomGroupeSansEspace as string : nomGroupeSansEspace = rtrim(nomGroupe) ' nom d'un ensemble, sans espace à la fin
+  dim groupeDansColl as GroupeT
 	
-	if estGroupeDansCollection(adherentsParGroupe, nomGroupeSansEspace) then
-	  ' ce groupe est déjà présent, l'adhérent est alors ajouté
-	  groupeDansColl = adherentsParGroupe(nomGroupeSansEspace)
-	  groupeDansColl.numAdherents.add(numeroAdherent)
-	else
-	  ' groupe non présent, il est créé
-	  groupeDansColl.nom = nomGroupeSansEspace
-	  groupeDansColl.typeGroupe = typeDeGroupe
-      dim numAdherentsCol as new Collection
-      numAdherentsCol.add(numeroAdherent)
-	  groupeDansColl.numAdherents = numAdherentsCol
-	  adherentsParGroupe.add(groupeDansColl, nomGroupeSansEspace)
-	endif
+  if estGroupeDansCollection(adherentsParGroupe, nomGroupeSansEspace) then
+    ' ce groupe est déjà présent, l'adhérent est alors ajouté
+    groupeDansColl = adherentsParGroupe(nomGroupeSansEspace)
+    groupeDansColl.numAdherents.add(numeroAdherent)
+  else
+    ' groupe non présent, il est créé
+    groupeDansColl.nom = nomGroupeSansEspace
+    groupeDansColl.typeGroupe = typeDeGroupe
+    dim numAdherentsCol as new Collection
+    numAdherentsCol.add(numeroAdherent)
+    groupeDansColl.numAdherents = numAdherentsCol
+    adherentsParGroupe.add(groupeDansColl, nomGroupeSansEspace)
+  endif
 end sub
 
 
@@ -152,7 +153,7 @@ End Function
 '******************************************************************
 ' Affiche la boite de dialogue permettant de choisir les ensembles
 '******************************************************************
-Sub afficheBoiteDialogue(byRef adherentsParEnsemble as new Collection)
+Sub afficheBoiteDialogueSelection(byRef adherentsParEnsemble as new Collection)
   ' réarangement des données pour les regrouper par type
   dim tableauTypesGroupe as new Collection ' collection des types de groupe. Chaque élément est de type TypeGroupeT
   tableauTypesGroupe = getEnsemblesParType(adherentsParEnsemble)
@@ -183,12 +184,40 @@ Sub afficheBoiteDialogue(byRef adherentsParEnsemble as new Collection)
   afficheToutesCheckBoxDeType("PROF", idxCheckBox, tableauTypesGroupe, absColonne3)
    
   ' Ajout des boutons OK et Annuler
-  dlg_Bouton(largeurBoite/2 - 60, hauteurBoite - 20, 50, 14, "dlgValide", "OK",      "ValideOuAnnule")
-  dlg_Bouton(largeurBoite/2 + 10, hauteurBoite - 20, 50, 14, "dlgAnnule", "Annuler", "ValideOuAnnule")
+  dlg_Bouton(largeurBoite/2 - 60, hauteurBoite - 20, 50, 14, "dlgValide", "OK",      "ValideChoixEnsembles")
+  dlg_Bouton(largeurBoite/2 + 10, hauteurBoite - 20, 50, 14, "dlgAnnule", "Annuler", "Annule")
      
   ' Affichage de la boite de dialogue une fois construite
   dlg_Affiche()
 
+End Sub
+
+
+'******************************************************************
+' Affiche la boite de dialogue indiquant que la copie dans le 
+' presse-papier se déroule en plusieurs fois
+'******************************************************************
+Sub afficheBoiteDialogueResteEmails(byVal nbCopiesFaites as integer, byVal nbCopiesTotal as integer, byVal ndAdressesDejaCopiees as integer, byVal nbTotalAdresses as integer)
+  dim nbAdressesRestantesMajorees as integer : nbAdressesRestantesMajorees = nbTotalAdresses - ndAdressesDejaCopiees - 1
+  if nbAdressesRestantesMajorees > NB_EMAILS_MAX then
+    nbAdressesRestantesMajorees = NB_EMAILS_MAX
+  endif
+  
+  dlg_Creation(60, 45, 155, 45, "Copie partielle des adresses - " & nbCopiesFaites & " / " & nbCopiesTotal )
+   
+  ' Ajout du texte de présentation
+  dlg_Libelle(5, 4, 250, 14, "lbl1", NB_EMAILS_MAX & " adresses mails ont été copiées dans le presse-papier.")
+  ' Ajout des boutons Copier et Annuler
+  dim finMessage as string
+  if nbCopiesFaites = nbCopiesTotal then
+    finMessage = " dernières adresses"
+  else
+    finMessage = " adresses suivantes"
+  endif
+  dlg_Bouton( 10, 20, 95, 14, "dlgSuite", "Copier les " & nbAdressesRestantesMajorees & finMessage, "SuiteRecupereEmails")
+  dlg_Bouton(115, 20, 30, 14, "dlgAnnule", "Annuler", "Annule")
+  ' Affichage de la boite de dialogue une fois construite
+  dlg_Affiche()
 End Sub
 
 
@@ -426,21 +455,31 @@ End Sub
 '************************************************************
 ' Listener unique pour OK ou Annuler
 '************************************************************
-Sub ValideOuAnnule_actionPerformed(oEve)
-   if oEve.Source.getModel().Name = "dlgValide" Then
-   	  dim checkBoxModel as object
-   	  dim idxColl as integer
-   	  dim groupe as GroupeT
-   	  nbEnsemblesSelectionnes = 0
-   	  for idxColl = 1 to numAdherentsParEnsemble.count
-   	      groupe = numAdherentsParEnsemble.item(idxColl)
-	      checkBoxModel = oDlgControle.getControl("checkBoxEnsemble" & groupe.nom).getModel()
-	      if checkBoxModel.state then
-	        ensemblesChoisisTab(nbEnsemblesSelectionnes) = idxColl
-	        nbEnsemblesSelectionnes = nbEnsemblesSelectionnes + 1
-	      end if   	  
-   	  next idxColl
-   endif
+Sub ValideChoixEnsembles_actionPerformed(oEve)
+  dim checkBoxModel as object
+  dim idxColl as integer
+  dim groupe as GroupeT
+  nbEnsemblesSelectionnes = 0
+  for idxColl = 1 to numAdherentsParEnsemble.count
+   	groupe = numAdherentsParEnsemble.item(idxColl)
+	checkBoxModel = oDlgControle.getControl("checkBoxEnsemble" & groupe.nom).getModel()
+	if checkBoxModel.state then
+	  ensemblesChoisisTab(nbEnsemblesSelectionnes) = idxColl
+	  nbEnsemblesSelectionnes = nbEnsemblesSelectionnes + 1
+	end if   	  
+  next idxColl
+  ' fermeture de la boite de dialogue
+  dlg_Ferme()
+End Sub
+
+
+Sub SuiteRecupereEmails_actionPerformed(oEve)
+  ' fermeture de la boite de dialogue
+   dlg_Ferme()
+End Sub
+
+Sub Annule_actionPerformed(oEve)
+  annule = true
   ' fermeture de la boite de dialogue
    dlg_Ferme()
 End Sub
@@ -471,7 +510,6 @@ End Sub
 '  Si un élève est dans plusieurs ensembles, ses adresses ne sont prises qu'une seule fois
 '************************************************************
 Function recupereEmails(byRef collAdherentsSlectionnes() as new Collection, feuille as object)
-  dim adressesMail as string ' résultat de la fonction
   dim indexMax as integer : indexMax = ubound(collAdherentsSlectionnes) ' nombre d'ensembles sélectionnés - 1
   dim numColEmails1 as long : numColEmails1 = feuille.getCellRangeByName("TITRE_ADR_MAIL1").cellAddress.column ' numéro de la colonne 'MAIL1'
   dim numColEmails2 as long : numColEmails2 = numColEmails1 + 1 ' numéro de la colonne 'MAIL2'
@@ -482,13 +520,19 @@ Function recupereEmails(byRef collAdherentsSlectionnes() as new Collection, feui
   dim val2 as integer
   dim collTmp as new Collection
   dim idxCTmp as integer
-  dim idx0, idx1, idx2 as integer
+  dim idx0, idx1, idx2, idx3 as integer : idx3 = 0
+  dim nbAdherentsSelectionnes as integer : nbAdherentsSelectionnes = 0 
+  dim nombreAdherentsEnsembleCourant as integer
   
   ' initialisation des tableaux
   for idx0 = 0 to indexMax
     indexesCollections(idx0) = 1
-    taillesMaxCollections(idx0) = collAdherentsSlectionnes(idx0).count
+    nombreAdherentsEnsembleCourant = collAdherentsSlectionnes(idx0).count
+    taillesMaxCollections(idx0) = nombreAdherentsEnsembleCourant
+    nbAdherentsSelectionnes = nbAdherentsSelectionnes + nombreAdherentsEnsembleCourant
   next idx0
+
+  dim adressesMail(nbAdherentsSelectionnes * 2) as string ' résultat de la fonction : tableau contenant les emails. La taille du tableau est une majoration.
   
   do
     ' parcours des collections, en choisissant le plus petit numéro d'adhérent
@@ -506,9 +550,11 @@ Function recupereEmails(byRef collAdherentsSlectionnes() as new Collection, feui
     
     ' lecture des emails de cet élève
     if plusPetiteValeur < 9999 then
-      adressesMail = adressesMail & rtrim(feuille.getCellByPosition(numColEmails1, plusPetiteValeur).string)
+      adressesMail(idx3) = rtrim(feuille.getCellByPosition(numColEmails1, plusPetiteValeur).string)
+      idx3 = idx3 + 1
       if feuille.getCellByPosition(numColEmails2, plusPetiteValeur).type <> com.sun.star.table.CellContentType.EMPTY then
-        adressesMail = adressesMail & rtrim(feuille.getCellByPosition(numColEmails2, plusPetiteValeur).string)
+        adressesMail(idx3) = rtrim(feuille.getCellByPosition(numColEmails2, plusPetiteValeur).string)
+        idx3 = idx3 + 1
       endif
     endif
     
@@ -522,10 +568,67 @@ Function recupereEmails(byRef collAdherentsSlectionnes() as new Collection, feui
     next idx2
     
   loop until plusPetiteValeur = 9999
-  
+
   recupereEmails = adressesMail
 end function
 
+'************************************************************
+' Restitue les emails en les copiant dans le presse-papier, 
+' en plusieurs fois s'il y en a beaucoup
+'************************************************************
+Sub restitueEmails(byRef emailsSelectionnes() as string)
+    dim nbEmailsTotal as integer : nbEmailsTotal = compteElementsTableau(emailsSelectionnes) ' nombre total d'emails correspondant aux ensembles sélectionnés
+    dim nbCopiesPressPapierTotal as integer : nbCopiesPressPapierTotal = fix(nbEmailsTotal / NB_EMAILS_MAX) + 1 ' nombre de copies nécessaires dans le presse-papier pour la prise en compte de tous les emails
+    dim nbCopiesPressPapierFait as integer : nbCopiesPressPapierFait = 1   
+    dim indexEmailsSel as integer
+    dim concatenationEmails as string
+    dim compteurEmailsPP as integer : compteurEmailsPP = 0 ' nombre d'emails dans le press-papier
+
+    
+    ' Parcours des emails pour les copiers dans le presse-papier, tout en limitant leur nombre à NB_EMAILS_MAX
+    for indexEmailsSel = 0 to nbEmailsTotal - 1
+      concatenationEmails = concatenationEmails & emailsSelectionnes(indexEmailsSel)
+      compteurEmailsPP = compteurEmailsPP + 1
+      if compteurEmailsPP = NB_EMAILS_MAX and not annule then
+        ' copie des adresses dans le presse-papier
+        copyToClipboard(concatenationEmails)
+        nbCopiesPressPapierFait = nbCopiesPressPapierFait + 1
+        if indexEmailsSel + 1 < nbEmailsTotal then
+          ' affiche une boite de dialogue indiquant qu'il reste des adresses à récupérer
+          afficheBoiteDialogueResteEmails(nbCopiesPressPapierFait, nbCopiesPressPapierTotal, indexEmailsSel, nbEmailsTotal)
+          compteurEmailsPP = 0
+          concatenationEmails = ""
+        endif
+      endif
+    next indexEmailsSel
+    
+    if compteurEmailsPP <> NB_EMAILS_MAX and not annule then
+      ' copie les dernières adresses dans le presse-papier
+      copyToClipboard(concatenationEmails)
+    end if 
+end sub
+
+
+'************************************************************
+' Compte le nombre d'éléments valorisés d'un tableau.
+' Contrainte : les éléments non valorisés sont tous à la fin.
+'************************************************************
+Function compteElementsTableau(byRef tabEmailsSelectionnes() as string) as integer
+  dim tailleTableau as integer : tailleTableau = uBound(tabEmailsSelectionnes)
+  dim index as integer
+  ' Hypothèse d'optimisation : le tableau contient au moins la moitié de ses cases valorisées
+  index = fix(tailleTableau / 2) - 1
+  ' Correction si cette hypothèse était fausse :
+  if tabEmailsSelectionnes(index) = "" then
+    index = -1
+  endif
+  
+  do
+    index = index + 1
+  loop until index = tailleTableau or tabEmailsSelectionnes(index) = ""
+
+  compteElementsTableau = index
+end function
 
  
 '************************************************************
